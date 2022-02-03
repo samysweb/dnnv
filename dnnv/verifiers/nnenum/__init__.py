@@ -63,7 +63,7 @@ class Nnenum(Verifier):
         ) as output_file:
             self._tmp_output_file = output_file
         args = (
-            "nnenum",
+            "nnenum_counterex",
             onnx_model_file.name,
             constraint_file.name,
             "-o",

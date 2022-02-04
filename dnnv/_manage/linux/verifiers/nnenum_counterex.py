@@ -14,6 +14,7 @@ from ...errors import InstallError, UninstallError
 runner_template = """#!{python_venv}/bin/python
 import argparse
 import numpy as np
+import pickle
 
 from pathlib import Path
 
@@ -31,6 +32,7 @@ def parse_args():
 
     parser.add_argument("-o", "--output", type=str)
     parser.add_argument("-p", "--num_processes", "--procs", type=int)
+    parser.add_argument("--iterate_violations", action='store_true')
 
     return parser.parse_args()
 
@@ -38,15 +40,16 @@ def parse_args():
 def main(args):
     Settings.UNDERFLOW_BEHAVIOR = "warn"
     Settings.PRINT_PROGRESS = False
-    Settings.PRINT_OUTPUT = True
-    Settings.RESULT_SAVE_COUNTER_STARS = True
+    Settings.PRINT_OUTPUT = False
+    if args.iterate_violations:
+        Settings.RESULT_SAVE_COUNTER_STARS = True
     Settings.FIND_CONCRETE_COUNTEREXAMPLES = True
     if args.num_processes is not None:
         Settings.NUM_PROCESSES = args.num_processes
 
-    (lb, ub), (A_input, b_input), (A_output, b_output) = np.load(
-        args.constraints, allow_pickle=True
-    )
+    (lb, ub), (A_input, b_input), (A_output, b_output) = (None,None), (None,None), (None,None)
+    with open(args.constraints, "rb") as f:
+        (lb, ub), (A_input, b_input), (A_output, b_output) = pickle.load(f)
     network = load_onnx_network(args.model)
     ninputs = A_input.shape[1]
 
@@ -77,22 +80,22 @@ def main(args):
             )
             print(cex)
             for star in result.stars:
-                #star.lpi.deserialize()
                 # Extract Ax <= b
                 A = star.lpi.get_constraints_csr()
                 b = star.lpi.get_rhs()
                 # Extract M*x + c
                 M = star.a_mat
                 c = star.bias
-                # Extract x_lb and x_ub
-                bounds = star.get_input_box_bounds()
+                # Compute bounds
+                dims = star.lpi.get_num_cols()
+                should_skip = np.zeros((dims, 2), dtype=bool)
+                bounds = star.update_input_box_bounds_old(None, should_skip)
                 counterex_stars.append((
                     A, b,
                     M, c,
                     bounds
                 ))
-            np.save("/tmp/counterex_stars.npy", counterex_stars)
-        np.save(args.output, (result.result_str, cex))
+        np.save(args.output, (result.result_str, (cex, counterex_stars)))
 
     return
 

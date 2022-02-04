@@ -1,4 +1,5 @@
 from __future__ import annotations
+import logging
 
 from ..expressions import Expression
 
@@ -7,6 +8,7 @@ class ExpressionVisitor:
     def __init__(self):
         self.visited = {}
         self._top_level = True
+        self.logger = logging.getLogger(__name__)
 
     def visit(self, expression):
         is_top_level = False

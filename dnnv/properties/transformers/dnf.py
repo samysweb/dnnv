@@ -1,4 +1,5 @@
 from __future__ import annotations
+import time
 
 from typing import Optional, Set, Tuple
 
@@ -13,19 +14,36 @@ from ..visitors.inference import DetailsInference
 class DnfTransformer(GenericExpressionTransformer):
     def visit(self, expression: Expression) -> Expression:
         if self._top_level:
+            self.logger.debug("Propagating constants...")
             expression = expression.propagate_constants()
+            self.logger.debug("Substitute Calls...")
             expression = SubstituteCalls().visit(expression)
+            self.logger.debug("Propagating constants...")
             expression = expression.propagate_constants()
+            self.logger.debug("Lift ITE...")
             expression = LiftIfThenElse().visit(expression)
+            self.logger.debug("Propagating constants...")
             expression = expression.propagate_constants()
+            self.logger.debug("Remove ITE...")
             expression = RemoveIfThenElse().visit(expression)
+            self.logger.debug("Propagating constants...")
             expression = expression.propagate_constants()
             if not isinstance(expression, ArithmeticExpression) or isinstance(
                 expression, Symbol
             ):
                 expression = Or(And(expression))
+            self.logger.debug("Details Inference...")
+            start = time.time()
             DetailsInference().visit(expression)
+            details_time = time.time() - start
+            self.logger.info(f"[TIME] Details Inference took {details_time} seconds")
+            start = time.time()
+        self.logger.debug(f"Super Visit of {expression}")
         expression = super().visit(expression)
+        self.logger.debug("Super Visit is done")
+        if self._top_level:
+            super_time = time.time() - start
+            self.logger.info(f"[TIME] Super Visit took {super_time} seconds")
         return expression
 
     def visit_And(self, expression: And) -> Or:

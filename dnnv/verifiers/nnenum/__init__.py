@@ -122,14 +122,13 @@ class Nnenum(Verifier):
                         try:
                             self.validate_counter_example(subproperty, cur_cex[0])
                         except NnenumError as e:
+                            self.logger.warn("SAT result without counter example.")
+                            self.logger.warn(e)
                             cur_cex = (None,cur_cex[1])
                         if cur_cex[0] is not None:
                             # Concrete counter-example
                             self.logger.debug("SAT! Validated counter example.")
                             cex[0] = cur_cex[0]
-                        else:
-                            # No concrete counter-example
-                            self.logger.warn("SAT result without counter example.")
                         # Adding any counter-example star sets there might be
                         self.logger.info(f"Encountered {len(cur_cex[1])} counter-example star sets.")
                         if len(cur_cex[1]) == 0:

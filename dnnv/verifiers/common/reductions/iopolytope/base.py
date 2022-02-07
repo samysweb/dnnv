@@ -226,7 +226,7 @@ class HalfspacePolytope(Constraint):
                         obj,
                         A_ub=self.A,
                         b_ub=self.b,
-                        bounds=(None, None),
+                        bounds=(self._lower_bound, self._upper_bound),
                         method="highs",
                     )
                     if result.status == 0:
@@ -243,7 +243,7 @@ class HalfspacePolytope(Constraint):
                         obj,
                         A_ub=self.A,
                         b_ub=self.b,
-                        bounds=(None, None),
+                        bounds=(self._lower_bound, self._upper_bound),
                         method="highs",
                     )
                     if result.status == 0:

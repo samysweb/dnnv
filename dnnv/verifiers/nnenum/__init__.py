@@ -8,14 +8,14 @@ from functools import partial
 from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Type, Union
 
 from dnnv.verifiers.common.base import Parameter, Verifier
-from dnnv.verifiers.common.reductions import IOPolytopeReduction, HalfspacePolytope
+from dnnv.verifiers.common.reductions import MixedConstraintIOPolytopeReduction, HalfspacePolytope
 from dnnv.verifiers.common.results import SAT, UNSAT, UNKNOWN, PropertyCheckResult
 
 from .errors import NnenumError, NnenumTranslatorError
 
 
 class Nnenum(Verifier):
-    reduction = partial(IOPolytopeReduction, HalfspacePolytope, HalfspacePolytope)
+    reduction = partial(MixedConstraintIOPolytopeReduction, HalfspacePolytope, HalfspacePolytope)
     translator_error = NnenumTranslatorError
     verifier_error = NnenumError
     parameters = {

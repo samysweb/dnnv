@@ -64,17 +64,16 @@ class IOPolytopeReduction(Reduction):
                 "Skipping conjunction with inconsistent output constraints."
             )
             return
+        self.logger.debug(f"CONJUNCTION {prop}")
         yield prop
 
     def reduce_property(self, expression: Expression) -> Iterator[Property]:
         if not isinstance(expression, Exists):
             raise NotImplementedError()  # TODO
         dnf_expression = expression.canonical()
-        self.logger.debug("DNF: %s", dnf_expression)
         assert isinstance(dnf_expression, Or)
 
         for conjunction in dnf_expression:
-            self.logger.info("CONJUNCTION: %s", conjunction)
             yield from self._reduce(conjunction)
 
     def visit(self, expression):

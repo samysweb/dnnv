@@ -2,6 +2,7 @@ from .base import *
 from .errors import *
 from .property import *
 from .reduction import *
+from .mixed_constraint_reduction import *
 
 __all__ = [
     # base
@@ -16,4 +17,6 @@ __all__ = [
     "IOPolytopeReduction",
     # errors
     "IOPolytopeReductionError",
+    # reduction in case of mixed in-out constraints
+    "MixedConstraintIOPolytopeReduction"
 ]

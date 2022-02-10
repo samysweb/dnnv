@@ -37,13 +37,21 @@ class MixedConstraintIOPolytopeReduction(IOPolytopeReduction):
         dnf_expression = expression.canonical()
         assert isinstance(dnf_expression, Or)
         netTransformer = NetworkTransformer()
-        dnf_expression = netTransformer.visit(dnf_expression)
+        with expression.ctx:
+            dnf_expression = netTransformer.visit(dnf_expression)
+            dnf_expression = self.unmix_conjunction(
+                dnf_expression,
+                netTransformer.networks,
+                netTransformer.inputs)
         for conjunction in dnf_expression:
+            self.logger.debug(f"Conjunction: {conjunction}")
             yield from self._reduce(conjunction)
     
-    def unmix_conjunction(self, conjunction: Expression) -> Expression:
-        self.unmix_transformer = UnmixConstraintsTransformer(
-            self._network_input_shapes,self._network_output_shapes)
+    def unmix_conjunction(self,
+        conjunction: Expression,
+        networks: Dict[Expression, Tuple[Tuple[Tuple[int, ...],...], Tuple[Tuple[int, ...],...]]],
+        inputs: Dict[Expression, Network]) -> Expression:
+        self.unmix_transformer = UnmixConstraintsTransformer(networks, inputs)
         return self.unmix_transformer.visit(conjunction)
 
 class NetworkTransformer(GenericExpressionTransformer):
@@ -55,17 +63,44 @@ class NetworkTransformer(GenericExpressionTransformer):
     def __init__(self):
         super().__init__()
         self._networks = {}
+        self._inputs = {}
 
     @property
     def networks(self):
         return self._networks
+    
+    @property
+    def inputs(self):
+        return self._inputs
+    
+    def visit_Call(self, expression: Call):
+        if isinstance(expression.function, Network):
+            new_network = self.visit(expression.function)
+            for x in expression.args:
+                self._inputs[x]=new_network
+            new_call = Call(
+                function=new_network,
+                args=expression.args,
+                kwargs=expression.kwargs
+            )
+            expression.ctx.shapes[new_call] = self.networks[new_network][1][1]
+            return new_call
+        else:
+            return expression
+
 
     def visit_Network(self, expression: Network):
         graph = expression.value
-        if graph not in self._networks:
-            self._networks[graph] = self.propagate_inputs_through_network(graph)
-        expression.concretize(self._networks[graph])
-        return expression
+        new_network = self.propagate_inputs_through_network(graph)
+        new_network_symbol = Network(expression.identifier)
+        new_network_symbol.concretize(new_network)
+        self._networks[new_network_symbol] = (
+            # Old Shapes:
+            (graph.input_shape[0], graph.output_shape[0]),
+            # New Shapes:
+            (new_network.input_shape[0], new_network.output_shape[0]),
+        )
+        return new_network_symbol
     
     def propagate_inputs_through_network(self, graph: OperationGraph) -> OperationGraph:
         if len(graph.input_shape) != 1 or len(graph.output_shape) != 1:
@@ -104,15 +139,20 @@ class PropagateInputsOperationsTransformer(OperationTransformer):
                 input_identity
             ))
         new_c = np.hstack((operation.c, np.zeros((2*self.input_size), dtype=operation.b.dtype)))
-        return Gemm(new_a, new_b, new_c)
+        result = Gemm(new_a, new_b, new_c,transpose_b=True)
+        return result
     
     def visit_Relu(self, operation: Relu) -> Relu:
         new_node = self.visit(operation.x)
         return Relu(new_node)
 
+    def visit_OperationGraph(self, operation: OperationGraph) -> OperationGraph:
+        outputs = []
+        for o in operation.output_operations:
+            outputs.append(self.visit(o))
+        return OperationGraph(outputs)
+
     def generic_visit(self, operation: Operation) -> Operation:
-        if isinstance(operation, OperationGraph):
-            return super().generic_visit(operation)
         raise NotImplementedError(f"Operation {operation} not supported!")
 
 
@@ -123,84 +163,84 @@ class UnmixConstraintsTransformer(GenericExpressionTransformer):
     Note, that each transformer instance must be used only once.
     """
     def __init__(self,
-    network_input_shapes:Dict[Expression, Tuple[int, ...]],
-    network_output_shapes:Dict[Expression, Tuple[int, ...]]):
+        networks: Dict[Expression, Tuple[Tuple[Tuple[int, ...],...], Tuple[Tuple[int, ...],...]]],
+        inputs: Dict[Expression, Network]):
         super().__init__()
-        self._network_input_shapes = network_input_shapes
-        self._network_output_shapes = network_output_shapes
-        self.unmix_necessary = False
-        self.networks = None
-
-    def visit(self, expression: Expression) -> Expression:
-        if self._top_level:
-            # TODO
-            print("Unmix Transformer")
-        expression = super().visit(expression)
-        return expression
+        # Mapping of networks to their input shapes
+        self.networks = networks
+        # Mapping of inputs to their network
+        self.inputs = inputs
+        self.need_normalization = False
+        self.need_normalization_cache = {}
+        self.subscript_transformer = ResolveSubscripts()
     
     def visit_And(self, expression: And) -> Expression:
         expressions = []
         for expr in expression.expressions:
-            self.networks = None
             assert len(expr.networks) <= 1, "Currently only supporting problems with one network"
             if len(expr.networks) == 1:
-                # In this case we need to resolve possible input variables (and reformat network outputs)
-                # Store networks to figure out shapes later
-                self.networks = [n for n in expr.networks]
+                old_expr = expr
                 expr = self.visit(expr)
+                if self.need_normalization:
+                    self.logger.debug(f"Normalizing expression {expr}")
+                    expr = self.subscript_transformer.visit(expr)
+                    expr = expr.canonical()
+                    if isinstance(expr, Or):
+                        assert len(expr.expressions)==1, "Or expressions should have only one expression at this point"
+                        expr = expr.expressions[0].expressions[0]
+                    self.logger.debug(f"After normalization: {expr}")
+                    self.need_normalization = False
+                self.visited[old_expr] = expr
             if isinstance(expr, And):
                 expressions.extend(expr.expressions)
             else:
                 expressions.append(expr)
-        return And(*expressions)
+        result = And(*expressions)
+        return result
 
     def visit_Call(self, expression: Call) -> Expression:
         if isinstance(expression.function, Network):
-            input_details = expression.function.value.input_details
-            assert(len(expression.function.value.output_shape[0])==2 and expression.function.value.output_shape[0][0]==1), "Currently only supporting mixed constraints for 2D output networks with dimension 1 being 1"
-            assert(len(expression.function.value.input_shape[0])==2 and expression.function.value.input_shape[0][0]==1), "Currently only supporting mixed constraints for 2D input networks with dimension 1 being 1"
-            regularEnd1 = expression.function.value.output_shape[0][0]
-            regularEnd2 = expression.function.value.output_shape[0][1]
-            inputSize = expression.function.value.input_shape[0][1]
-            
-            expression.function._value.output_shape = (
-                (regularEnd1, regularEnd2+inputSize),
-            )
+            (old_input_shape, old_output_shape) = self.networks[expression.function][0]
+            assert (len(old_output_shape)==2)
 
-            return expression[:regularEnd1,:regularEnd2]
+            return expression[:old_output_shape[0],:old_output_shape[1]]
         else:
-            raise self.reduction_error(
-                "Unsupported property:"
-                f" Function {expression.function} is not currently supported"
-            )
-        
-    def visit_Network(self, expression: Network) -> Expression:
-        expression.value.output_shape = (
-            (expression.value.output_shape[0][0],
-            expression.value.output_shape[0][1]+self._network_input_shapes[expression][1]),
-        )
-        return expression
+            return expression
     
     def visit_Symbol(self, expression: Symbol):
-        if expression not in self._network_input_shapes:
-            print("HELP! I'm lost, what symbol is this?")
-        print("Oh look at this mixed variable! We need to resolve it!")
-        print(expression)
-        #print("Shape: ",self._network_input_shapes[expression])
-        print("Output Shape: ",self.networks[0].value.output_shape)
-        self.unmix_necessary = True
-        assert len(self.networks[0].value.output_shape[0])==2 and self.networks[0].value.output_shape[0][0] == 1, "Currently only supporting mixed constraints for 2D output networks with dimension 1 being 1"
+        if expression not in self.inputs:
+            logging.debug(f"Ignoring symbol {expression} which does not seem to be a network input...")
+        # If it is a network input, use the newly added propagated values...
+        relevant_network = self.inputs[expression]
+        first_slice_end = (self.networks[relevant_network][0][1][1]+self.networks[relevant_network][1][0][1])
         callexpr = (Call(
-            function=self.networks[0],
+            function=relevant_network,
             args=[expression],
             kwargs={},
-        ))[:self.networks[0].value.output_shape[0][0],self.networks[0].value.output_shape[0][1]:]
-        #self._network_output_shapes[self.networks[0]] = (
-        #    (self.networks[0].value.output_shape[0][0],
-        #    self.networks[0].value.output_shape[0][1]+self._network_input_shapes[expression][1])
-        #)
-        print("New shape:")
-        print(self._network_output_shapes[self.networks[0]])
-        return callexpr
+        ))
+        expression.ctx.shapes[callexpr] = self.networks[relevant_network][1][1]
+        inputexpr=Add(
+            callexpr[:self.networks[relevant_network][0][1][0],self.networks[relevant_network][0][1][1]:first_slice_end],
+            -callexpr[:self.networks[relevant_network][0][1][0],first_slice_end:]
+        )
+        expression.ctx.shapes[inputexpr] = self.networks[relevant_network][0][0]
+        expression.ctx.types[inputexpr] = expression.ctx.types[expression]
+        self.need_normalization = True
+        return inputexpr
 
+class ResolveSubscripts(GenericExpressionTransformer):
+    def visit_Subscript(self, expression: Subscript) -> Expression:
+        if isinstance(expression.expr1, Negation):
+            new_inner_expr = Subscript(expression.expr1.expr, expression.expr2)
+            new_inner_expr = self.visit(new_inner_expr)
+            new_expr1 = Negation(new_inner_expr)
+            return new_expr1
+        elif isinstance(expression.expr1, Add):
+            expressions = []
+            for expr in expression.expr1.expressions:
+                new_expr = self.visit(Subscript(expr, expression.expr2))
+                expressions.append(new_expr)
+            result = Add(*expressions)
+            return result
+        return expression
         

@@ -14,19 +14,28 @@ from ..visitors.inference import DetailsInference
 class DnfTransformer(GenericExpressionTransformer):
     def visit(self, expression: Expression) -> Expression:
         if self._top_level:
+            self.logger.debug("Propagating Constants...")
             expression = expression.propagate_constants()
+            self.logger.debug("Substituting Calls...")
             expression = SubstituteCalls().visit(expression)
+            self.logger.debug("Propagating Constants...")
             expression = expression.propagate_constants()
+            self.logger.debug("Lifting IfThenElse...")
             expression = LiftIfThenElse().visit(expression)
+            self.logger.debug("Propagating Constants...")
             expression = expression.propagate_constants()
+            self.logger.debug("Removing IfThenElse...")
             expression = RemoveIfThenElse().visit(expression)
+            self.logger.debug("Propagating Constants...")
             expression = expression.propagate_constants()
             if not isinstance(expression, ArithmeticExpression) or isinstance(
                 expression, Symbol
             ):
                 expression = Or(And(expression))
             start = time.time()
+            self.logger.debug("Inferring details...")
             DetailsInference().visit(expression)
+            self.logger.debug("Generating DNF...")
         expression = super().visit(expression)
         return expression
 

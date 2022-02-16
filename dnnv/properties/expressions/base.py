@@ -23,6 +23,14 @@ if typing.TYPE_CHECKING:  # pragma: no cover
 
 ExpressionType = TypeVar("ExpressionType", bound="Expression")
 
+class ExpressionHashObject:
+    def __init__(self, expr):
+        self.expression = expr
+    def __eq__(self, other):
+        return self is other
+
+    def __hash__(self):
+        return hash(self.expression)
 
 class Expression:
     def __new__(cls, *args, **kwargs):
@@ -33,6 +41,8 @@ class Expression:
     def __init__(self, ctx: Optional[Context] = None):
         self.ctx: Context = ctx or get_context()
         self._hash_cache_base = None
+        self._hashobj = ExpressionHashObject(self)
+        self._equivalence_cache = {}
 
     def __bool__(self):
         if self.is_concrete:
@@ -55,9 +65,10 @@ class Expression:
             if isinstance(name, str) and name.startswith("__"):
                 # This case allows access to flags like `__FLAG_is_concrete`
                 return super().__getattribute__(name)
-            if isinstance(name, str) and self.is_concrete:
+            conc = self.is_concrete
+            if isinstance(name, str) and conc:
                 return Constant(getattr(self.value, name))
-            if isinstance(name, Constant) and self.is_concrete:
+            if isinstance(name, Constant) and conc:
                 return Constant(getattr(self.value, name.value))
             if isinstance(name, Expression):
                 return Attribute(self, name)
@@ -166,7 +177,8 @@ class Expression:
 
     def concretize(self: ExpressionType, *args, **kwargs) -> ExpressionType:
         from .terms import Symbol
-
+        if getattr(self, "__FLAG_is_concrete", False):
+            delattr(self, "__FLAG_is_concrete")
         nargs = len(args)
         if nargs > 0:
             if not isinstance(self, Symbol):
@@ -205,6 +217,7 @@ class Expression:
         child = None
         for child in self.iter(max_depth=1, include_self=False):
             if not child.is_concrete:
+                setattr(self, "__FLAG_is_concrete", False)
                 return False
         setattr(self, "__FLAG_is_concrete", True)
         return True
@@ -257,10 +270,14 @@ class AssociativeExpression(Expression):
                 self.expressions.extend(expression.expressions)
             else:
                 self.expressions.append(expression)
+        
 
     def is_equivalent(self, other):
         if super().is_equivalent(other):
             return True
+        
+        if other._hashobj in self._equivalence_cache:
+            return self._equivalence_cache[other._hashobj]
         if (
             type(self) == type(other)
             and not self.is_concrete
@@ -269,7 +286,11 @@ class AssociativeExpression(Expression):
             and all(expr in other.expressions for expr in self.expressions)
             and all(expr in self.expressions for expr in other.expressions)
         ):
+            self._equivalence_cache[other._hashobj] = True
+            other._equivalence_cache[self._hashobj] = True
             return True
+        self._equivalence_cache[other._hashobj] = False
+        other._equivalence_cache[self._hashobj] = False
         return False
 
     @property

@@ -44,7 +44,6 @@ class MixedConstraintIOPolytopeReduction(IOPolytopeReduction):
                 netTransformer.networks,
                 netTransformer.inputs)
         for conjunction in dnf_expression:
-            self.logger.debug(f"Conjunction: {conjunction}")
             yield from self._reduce(conjunction)
     
     def unmix_conjunction(self,
@@ -184,10 +183,10 @@ class UnmixConstraintsTransformer(GenericExpressionTransformer):
                 if self.need_normalization:
                     self.logger.debug(f"Normalizing expression {expr}")
                     expr = self.subscript_transformer.visit(expr)
-                    expr = expr.canonical()
-                    if isinstance(expr, Or):
-                        assert len(expr.expressions)==1, "Or expressions should have only one expression at this point"
-                        expr = expr.expressions[0].expressions[0]
+                    #expr = expr.canonical()
+                    #if isinstance(expr, Or):
+                    #    assert len(expr.expressions)==1, "Or expressions should have only one expression at this point"
+                    #    expr = expr.expressions[0].expressions[0]
                     self.logger.debug(f"After normalization: {expr}")
                     self.need_normalization = False
                 self.visited[old_expr] = expr

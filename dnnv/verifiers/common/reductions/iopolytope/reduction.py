@@ -64,7 +64,6 @@ class IOPolytopeReduction(Reduction):
                 "Skipping conjunction with inconsistent output constraints."
             )
             return
-        self.logger.debug(f"CONJUNCTION {prop}")
         yield prop
 
     def reduce_property(self, expression: Expression) -> Iterator[Property]:
